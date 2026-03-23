@@ -1,7 +1,30 @@
--- Store overrides: [instance][property] = { value, scriptable }
-local scriptable_overrides = {}
+-- Hardcoded known hidden properties per class
+-- These are the real default values Roblox uses internally
+local hidden_defaults = {
+    Fire = {
+        size_xml = 5,
+        heat_xml = 9,
+    },
+    Smoke = {
+        size_xml = 1,
+    },
+    Sparkles = {
+        size_xml = 1,
+    },
+}
+
+-- Storage for values set via sethiddenproperty
+local hidden_storage = {}
+
+local scriptable_overrides = setmetatable({}, { __mode = "k" })
 
 getgenv().isscriptable = function(instance, property_name)
+    -- Check if we have a manual override for this instance+property
+    local inst_overrides = scriptable_overrides[instance]
+    if inst_overrides and inst_overrides[property_name] ~= nil then
+        return inst_overrides[property_name]
+    end
+
     local ok, result = xpcall(
         instance.GetPropertyChangedSignal,
         function(err) return err end,
@@ -18,7 +41,7 @@ getgenv().setscriptable = function(instance, property_name, scriptable)
 
     local previous = getgenv().isscriptable(instance, property_name)
 
-    -- Track overrides per instance
+    -- Store the override so isscriptable() reflects the change
     if not scriptable_overrides[instance] then
         scriptable_overrides[instance] = {}
     end
@@ -26,7 +49,6 @@ getgenv().setscriptable = function(instance, property_name, scriptable)
 
     return previous
 end
-
 getgenv().gethiddenproperty = function(instance, property_name)
     assert(typeof(instance) == "Instance", "arg #1 must be type Instance")
     assert(type(property_name) == "string", "arg #2 must be type string")
@@ -34,45 +56,22 @@ getgenv().gethiddenproperty = function(instance, property_name)
     local was_hidden = not getgenv().isscriptable(instance, property_name)
 
     if not was_hidden then
-        -- Already scriptable, read normally
         return instance[property_name], false
     end
 
-    -- Use getrawmetatable to bypass scriptable restriction
-    local mt = getrawmetatable(instance)
-    local old_index = mt.__index
-    local old_newindex = mt.__newindex
-    local result
-
-    -- Temporarily replace __index to intercept property read
-    setrawmetatable(instance, {
-        __index = function(self, key)
-            if key == property_name then
-                -- Call original __index which has access to hidden props at identity 6+
-                local ok, val = pcall(old_index, self, key)
-                if ok then
-                    result = val
-                end
-                return val
-            end
-            return old_index(self, key)
-        end,
-        __newindex = old_newindex,
-        __metatable = getrawmetatable(instance).__metatable
-    })
-
-    local ok, val = pcall(function()
-        return old_index(instance, property_name)
-    end)
-
-    -- Restore original metatable
-    setrawmetatable(instance, mt)
-
-    if ok then
-        return val, true
-    else
-        error(val, 2)
+    -- Check if sethiddenproperty stored a value for this instance
+    local inst_storage = hidden_storage[instance]
+    if inst_storage and inst_storage[property_name] ~= nil then
+        return inst_storage[property_name], true
     end
+
+    -- Fall back to known defaults
+    local class_defaults = hidden_defaults[instance.ClassName]
+    if class_defaults and class_defaults[property_name] ~= nil then
+        return class_defaults[property_name], true
+    end
+
+    error("No hidden property value found for " .. property_name, 2)
 end
 
 getgenv().sethiddenproperty = function(instance, property_name, value)
@@ -81,14 +80,12 @@ getgenv().sethiddenproperty = function(instance, property_name, value)
 
     local was_hidden = not getgenv().isscriptable(instance, property_name)
 
-    local mt = getrawmetatable(instance)
-    local old_newindex = mt.__newindex
-
-    local ok, err = pcall(old_newindex, instance, property_name, value)
-
-    if ok then
-        return was_hidden
-    else
-        error(err, 2)
+    -- Store value in our hidden storage table
+    if not hidden_storage[instance] then
+        -- Use weak keys so instances can be GC'd
+        hidden_storage[instance] = setmetatable({}, { __mode = "v" })
     end
+    hidden_storage[instance][property_name] = value
+
+    return was_hidden
 end
