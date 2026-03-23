@@ -89,3 +89,47 @@ getgenv().sethiddenproperty = function(instance, property_name, value)
 
     return was_hidden
 end
+
+getgenv().getrunningscripts = function()
+    local scripts = {}
+    
+    for _, instance in ipairs(getinstances()) do
+        if instance:IsA("LocalScript") or instance:IsA("ModuleScript") then
+            table.insert(scripts, instance)
+        end
+    end
+    
+    return scripts
+end
+
+local callback_storage = setmetatable({}, { __mode = "k" })
+
+getgenv().getcallbackvalue = function(instance, property_name)
+    assert(typeof(instance) == "Instance", "arg #1 must be type Instance")
+    assert(type(property_name) == "string", "arg #2 must be type string")
+
+    local inst_storage = callback_storage[instance]
+    if inst_storage then
+        return inst_storage[property_name]
+    end
+
+    return nil
+end
+
+-- Hook __newindex on the shared instance metatable
+local mt = getrawmetatable(game)
+local old_newindex = mt.__newindex
+
+setreadonly(mt, false)
+
+mt.__newindex = function(self, key, value)
+    if type(value) == "function" then
+        if not callback_storage[self] then
+            callback_storage[self] = {}
+        end
+        callback_storage[self][key] = value
+    end
+    return old_newindex(self, key, value)
+end
+
+setreadonly(mt, true)
